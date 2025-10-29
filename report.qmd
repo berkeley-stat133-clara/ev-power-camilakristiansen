@@ -1,34 +1,118 @@
 ---
 title: "EV Power - Lab 4 Project Report"
-format: typst
+author: "Camila Kristiansen"
+format: pdf
+execute:
+  echo: true
 ---
+
+
+::: {.callout}
+This project explores how electricity prices and renewable energy use relate to electric vehicle adoption across USA's states in 2023.
+:::
 
 # Example Solution 1
 
 ## **Part 0: libraries**
 
 ```{r}
-
+library(dplyr)
+library(tidyverse)
+library(readr)
+library(ggplot2)
 ```
 
 ## **Part 1:** **Defining Research Question**
-
-Chosen Question:
+Chosen Question: Do cheaper electricity prices make people more likely to buy electric vehicles in 2023?
 
 ## **Part 2: Data Preparation and Cleaning**
 
 ```{r}
+
+library(tidyverse)
+num <- readr::parse_number
+key <- tibble(abbr=c(state.abb,"DC","PR"),name=c(state.name,"District of Columbia","Puerto Rico"))
+fix_state <- \(x) str_to_title(replace(x,!x%in%key$name,key$name[match(toupper(x),key$abbr)]))
+
+lines <- readLines("data/av-energy-price-2021-2023.csv")
+lines <- gsub('"', '', lines)
+lines <- lines[grepl(",", lines)]
+lines <- lines[!grepl("Total|,,", lines)]
+tmp <- tempfile(fileext = ".csv")
+writeLines(lines, tmp)
+
+price <- read_csv(tmp, show_col_types = FALSE) |>
+  set_names(c("state","price_2021","price_2022","price_2023")) |>
+  mutate(state = fix_state(state), price_2023 = num(price_2023)) |>
+  filter(!is.na(state)) |>
+  select(state, price_2023)
+
+ev <- read_csv("data/ev-registrations-by-state-2023.csv",
+               col_names = FALSE, show_col_types = FALSE) |>
+  set_names(c("state","ev_2023")) |> slice(-1) |>
+  mutate(state = fix_state(state), ev_2023 = num(ev_2023))
+
+renew <- read_csv("data/renew-use-2023.csv", show_col_types = FALSE) |>
+  rename(state=1,source=2,val=3) |>
+  mutate(state = fix_state(state), val = num(val)) |>
+  group_by(state) |> summarise(renew_2023 = sum(val,na.rm=TRUE), .groups="drop")
+
+total <- read_csv("data/total-use-2023.csv", show_col_types = FALSE) |>
+  rename(source=1) |> pivot_longer(-source,names_to="abbr",values_to="val") |>
+  mutate(state = fix_state(abbr), val = as.double(val)) |>
+  group_by(state) |> summarise(total_2023 = sum(val,na.rm=TRUE), .groups="drop")
+
+clean_2023 <- ev |> full_join(price,by="state") |> 
+  full_join(renew,by="state") |> 
+  full_join(total,by="state")
+
+fix_state <- \(x) {
+  x <- str_to_title(x)
+  replace(x, !x %in% key$name,
+          key$name[match(toupper(x), key$abbr)])
+}
+
+head(clean_2023)
 
 ```
 
 ## **Part 3: Joining / Pivoting Datasets for Analysis**
 
 ```{r}
+joined_2023 <- clean_2023 |>
+  mutate(
+    renew_pct = (renew_2023 / total_2023) * 100,
+    ev_per_energy = ev_2023 / total_2023
+  ) |>
+  select(state, ev_2023, price_2023, renew_pct, ev_per_energy)
 
+head(joined_2023)
 ```
+
+::: {.callout}
+I picked to use full_join() because it keeps all states consistent for all of the datasets, which we really need for these comparisons. Then, I created renew_pct so that we coudl calculate the proportion of renewables in total energy and ev_per_energy to display EV registrations in relation to energy consumption. All of these characteristics help us see whether states with cleaner of cheaper energy also have higher electrical vehicle use/purchases.
+:::
 
 ## **Part 4: Mapping Visualization**
 
 ```{r}
+library(ggplot2)
 
+states <- ggplot2::map_data("state")
+map_2023 <- joined_2023 |>
+  mutate(region = tolower(state)) |>
+  right_join(states, by = "region")
+
+ggplot(map_2023, aes(long, lat, group = group, fill = renew_pct)) +
+  geom_polygon(color = "hotpink") +
+  scale_fill_gradient(low = "mistyrose", high = "deeppink3", name = "% Renewable") +
+  labs(title = "Renewable Energy Proportion by State in 2023",
+       subtitle = "Darker = Cleaner Energy Mix") +
+  theme_void() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
+
+::: {.callout}
+The map makes it pretty clear which states are leading in clean energy with darker pink spots like Oregon, Maine, and North Dakota standing  out with higher renewable use.  The lighter pink states (mostly in the South and Midwest) are still relying more on non-renewables. Overall, this helps answer the main question we came up with because states with stronger renewable mixes mostly correspond with higher electricle vehicle use. It suggests that having cleaner, cheaper energy sources might actually make people more likely to go electric.
+:::
